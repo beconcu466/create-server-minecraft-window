@@ -1,0 +1,310 @@
+$ErrorActionPreference = "Stop"
+
+Write-Host ""
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host " Minecraft Java Server 1.20.1" -ForegroundColor Cyan
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host ""
+
+# ============================================================
+# 1. Dùng thư mục hiện tại làm thư mục server
+# ============================================================
+
+$ServerDir = (Get-Location).Path
+
+Write-Host "[OK] Server folder:" -ForegroundColor Green
+Write-Host "     $ServerDir"
+Write-Host ""
+
+# ============================================================
+# 2. Kiểm tra Java 17
+# ============================================================
+
+Write-Host "[CHECK] Java 17..." -ForegroundColor Yellow
+
+$JavaVersionOutput = cmd.exe /c "java -version 2>&1"
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[ERROR] Không tìm thấy Java." -ForegroundColor Red
+    exit 1
+}
+
+$JavaVersionText = $JavaVersionOutput -join "`n"
+
+if ($JavaVersionText -match 'version "17\.') {
+    Write-Host "[OK] Java 17 đã sẵn sàng." -ForegroundColor Green
+}
+else {
+    Write-Host "[ERROR] Java hiện tại không phải Java 17." -ForegroundColor Red
+    Write-Host $JavaVersionText
+    exit 1
+}
+
+# ============================================================
+# 3. Tải server.jar nếu chưa có
+# ============================================================
+
+$ServerJar = Join-Path $ServerDir "server.jar"
+
+$ServerJarUrl = "https://piston-data.mojang.com/v1/objects/84194a2f286ef7c14ed7ce0090dba59902951553/server.jar"
+
+if (Test-Path $ServerJar) {
+
+    $JarSize = (Get-Item $ServerJar).Length
+
+    if ($JarSize -gt 10MB) {
+        Write-Host "[SKIP] server.jar đã tồn tại." -ForegroundColor Green
+    }
+    else {
+        Write-Host "[DOWNLOAD] server.jar không hợp lệ, tải lại..." -ForegroundColor Yellow
+
+        Invoke-WebRequest `
+            -Uri $ServerJarUrl `
+            -OutFile $ServerJar `
+            -UseBasicParsing
+
+        Write-Host "[OK] Đã tải server.jar." -ForegroundColor Green
+    }
+
+}
+else {
+
+    Write-Host "[DOWNLOAD] Đang tải Minecraft Server 1.20.1..." -ForegroundColor Yellow
+
+    Invoke-WebRequest `
+        -Uri $ServerJarUrl `
+        -OutFile $ServerJar `
+        -UseBasicParsing
+
+    Write-Host "[OK] Đã tải server.jar." -ForegroundColor Green
+}
+
+# ============================================================
+# 4. EULA
+# ============================================================
+
+$EulaFile = Join-Path $ServerDir "eula.txt"
+
+if (Test-Path $EulaFile) {
+
+    $EulaContent = Get-Content $EulaFile -Raw
+
+    if ($EulaContent -match "eula=true") {
+        Write-Host "[SKIP] eula=true đã có." -ForegroundColor Green
+    }
+    else {
+        Set-Content $EulaFile "eula=true" -Encoding ASCII
+        Write-Host "[UPDATE] Đã đặt eula=true." -ForegroundColor Green
+    }
+
+}
+else {
+
+    Set-Content $EulaFile "eula=true" -Encoding ASCII
+    Write-Host "[CREATE] Đã tạo eula.txt." -ForegroundColor Green
+}
+
+# ============================================================
+# 5. server.properties
+# ============================================================
+
+$PropertiesFile = Join-Path $ServerDir "server.properties"
+
+if (Test-Path $PropertiesFile) {
+    $Properties = Get-Content $PropertiesFile
+    Write-Host "[SKIP] server.properties đã tồn tại, giữ dữ liệu." -ForegroundColor Green
+}
+else {
+    $Properties = @()
+    Write-Host "[CREATE] Tạo server.properties..." -ForegroundColor Yellow
+}
+
+function Set-MinecraftProperty {
+    param (
+        [string[]]$Lines,
+        [string]$Key,
+        [string]$Value
+    )
+
+    $Found = $false
+    $NewLines = @()
+
+    foreach ($Line in $Lines) {
+
+        if ($Line -match "^$([regex]::Escape($Key))=") {
+
+            if (-not $Found) {
+                $NewLines += "$Key=$Value"
+                $Found = $true
+            }
+
+        }
+        else {
+            $NewLines += $Line
+        }
+    }
+
+    if (-not $Found) {
+        $NewLines += "$Key=$Value"
+    }
+
+    return $NewLines
+}
+
+# Cho phép client không premium
+$Properties = Set-MinecraftProperty $Properties "online-mode" "false"
+
+# Port Minecraft
+$Properties = Set-MinecraftProperty $Properties "server-port" "25565"
+
+# Để server nghe trên tất cả interface
+$Properties = Set-MinecraftProperty $Properties "server-ip" ""
+
+Set-Content $PropertiesFile $Properties -Encoding ASCII
+
+Write-Host "[OK] server.properties đã cấu hình." -ForegroundColor Green
+
+# ============================================================
+# 6. Firewall
+# ============================================================
+
+Write-Host ""
+Write-Host "[CHECK] Windows Firewall..." -ForegroundColor Yellow
+
+$FirewallRuleName = "Minecraft Java Server TCP 25565"
+
+try {
+
+    $FirewallRule = Get-NetFirewallRule `
+        -DisplayName $FirewallRuleName `
+        -ErrorAction SilentlyContinue
+
+    if ($FirewallRule) {
+
+        Write-Host "[SKIP] Firewall rule đã tồn tại." -ForegroundColor Green
+
+    }
+    else {
+
+        New-NetFirewallRule `
+            -DisplayName $FirewallRuleName `
+            -Direction Inbound `
+            -Protocol TCP `
+            -LocalPort 25565 `
+            -Action Allow `
+            -Profile Private `
+            -ErrorAction Stop | Out-Null
+
+        Write-Host "[OK] Đã mở port 25565." -ForegroundColor Green
+    }
+
+}
+catch {
+
+    Write-Host "[WARNING] Không thể tự mở Firewall." -ForegroundColor Yellow
+    Write-Host "Nếu máy khác không vào được, hãy chạy PowerShell bằng Administrator."
+}
+
+# ============================================================
+# 7. Hiển thị IP Wi-Fi
+# ============================================================
+
+Write-Host ""
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host " IP Minecraft" -ForegroundColor Cyan
+Write-Host "=============================================" -ForegroundColor Cyan
+
+$WiFiIP = Get-NetIPAddress `
+    -AddressFamily IPv4 `
+    -InterfaceAlias "Wi-Fi" `
+    -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.IPAddress -notlike "127.*" -and
+        $_.IPAddress -notlike "169.254.*"
+    } |
+    Select-Object -First 1 -ExpandProperty IPAddress
+
+if ($WiFiIP) {
+    Write-Host ""
+    Write-Host "  $WiFiIP`:25565" -ForegroundColor Green
+    Write-Host ""
+}
+else {
+    Write-Host "[WARNING] Không tìm thấy IP Wi-Fi." -ForegroundColor Yellow
+}
+
+# ============================================================
+# 8. Tạo file start-server.ps1
+# ============================================================
+
+$StartScript = Join-Path $ServerDir "start-server.ps1"
+
+$StartScriptContent = @'
+Set-Location $PSScriptRoot
+
+Write-Host ""
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host " Minecraft Server 1.20.1" -ForegroundColor Cyan
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host ""
+
+java -Xms1G -Xmx2G -jar server.jar nogui
+
+Write-Host ""
+Write-Host "Server đã dừng."
+Read-Host "Nhấn Enter để đóng"
+'@
+
+Set-Content $StartScript $StartScriptContent -Encoding UTF8
+
+Write-Host "[OK] Đã tạo start-server.ps1." -ForegroundColor Green
+
+# ============================================================
+# 9. Kiểm tra server đang chạy
+# ============================================================
+
+$ExistingServer = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.Name -match "^java(.exe)?$" -and
+        $_.CommandLine -match "server\.jar"
+    }
+
+if ($ExistingServer) {
+
+    Write-Host ""
+    Write-Host "[SKIP] Minecraft server đang chạy." -ForegroundColor Yellow
+
+}
+else {
+
+    Write-Host ""
+    Write-Host "[START] Đang khởi động Minecraft server..." -ForegroundColor Cyan
+
+    Start-Process `
+        -FilePath "powershell.exe" `
+        -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$StartScript`"" `
+        -WorkingDirectory $ServerDir
+}
+
+# ============================================================
+# 10. Hoàn tất
+# ============================================================
+
+Write-Host ""
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host " HOÀN TẤT" -ForegroundColor Green
+Write-Host "=============================================" -ForegroundColor Cyan
+Write-Host ""
+
+Write-Host "Toàn bộ server nằm tại:"
+Write-Host "$ServerDir" -ForegroundColor Green
+
+Write-Host ""
+Write-Host "Các file chính:"
+Write-Host "  server.jar"
+Write-Host "  server.properties"
+Write-Host "  eula.txt"
+Write-Host "  start-server.ps1"
+Write-Host "  world\"
+Write-Host "  logs\"
+Write-Host ""
